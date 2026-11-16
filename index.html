@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Daily Pulse" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>Daily Pulse</title>
+  <meta name="description" content="Simple daily reminders for tasks, people to reach out to, and checklists. Works offline." />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="preload" href="fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col antialiased pb-12">
+
+  <!-- Live In-App Alert Banner Container -->
+  <div id="banner-stack" aria-live="polite" class="fixed top-3 left-3 right-3 sm:left-auto sm:right-4 sm:w-96 z-50 flex flex-col gap-2.5 pointer-events-none"></div>
+
+  <!-- Compact Sticky Top Header -->
+  <header class="bg-white/95 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-30">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2.5">
+      <!-- Brand + Live Sync Status -->
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-slate-900">Daily Pulse</h1>
+            <button type="button" id="sync-status-btn" onclick="openSyncModal()" title="Where your data is saved" class="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200/70 transition cursor-pointer">
+              <span id="sync-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span id="sync-label">Saved on this device</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Action Controls (One-thumb touch targets) -->
+      <div class="flex items-center gap-1.5 sm:gap-2">
+        <!-- Browser Notification Permission Status -->
+        <button type="button" id="notif-perm-btn" onclick="handleEnableNotifications()" class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition cursor-pointer">
+          <span id="notif-perm-dot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+          <span id="notif-perm-text">Tap to Enable</span>
+        </button>
+
+        <!-- Sound Chime Toggle -->
+        <button type="button" id="sound-btn" onclick="toggleSound()" title="Toggle Chime" class="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium transition cursor-pointer">
+          <span id="sound-icon">🔔</span>
+        </button>
+
+        <!-- Test Notification -->
+        <button type="button" onclick="triggerTestReminder()" class="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer">
+          Test
+        </button>
+
+        <!-- Phone Setup & Calendar Export Modal -->
+        <button type="button" onclick="openPhoneModal()" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition cursor-pointer flex items-center gap-1.5">
+          <span>📱</span>
+          <span>Phone Setup</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Single-Page Main Content -->
+  <main class="flex-1 max-w-5xl w-full mx-auto px-4 pt-5 space-y-5">
+
+    <!-- 1. PRIMARY ACTIONABLE SECTIONS IMMEDIATELY AT TOP (1-column on mobile, 2-column grid on desktop) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+
+      <!-- SECTION A: TASKS -->
+      <section aria-label="Tasks" class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center text-xs font-bold">✓</span>
+            <h2 class="text-base font-bold text-slate-900">Tasks</h2>
+          </div>
+          <label class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+            <span>Remind</span>
+            <input type="checkbox" id="card-toggle-tasks" checked onchange="toggleSectionReminder('tasks', this.checked)" class="w-4 h-4 rounded text-indigo-600 cursor-pointer" />
+          </label>
+        </div>
+
+        <!-- Quick-Add Task Form -->
+        <form onsubmit="handleAddTask(event)" class="flex flex-col sm:flex-row gap-2">
+          <input type="text" id="task-input" required placeholder="Add a task to be reminded of..." class="flex-1 px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          <div class="flex gap-2">
+            <select id="task-priority-input" title="Task priority" class="px-2.5 py-2 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-700">
+              <option value="Medium">Med</option>
+              <option value="High">High</option>
+              <option value="Low">Low</option>
+            </select>
+            <input type="time" id="task-time-input" title="Optional specific reminder time" class="px-2.5 py-2 text-xs font-medium rounded-xl border border-slate-300 bg-white text-slate-700" />
+            <button type="submit" class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition cursor-pointer shrink-0">
+              Add
+            </button>
+          </div>
+        </form>
+
+        <!-- Task Items List -->
+        <div id="tasks-list" class="space-y-2"></div>
+      </section>
+
+      <!-- SECTION B: OUTREACH (Contacts to Reach Out To) -->
+      <section aria-label="Outreach" class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center text-xs font-bold">👋</span>
+            <h2 class="text-base font-bold text-slate-900">Outreach</h2>
+          </div>
+          <label class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+            <span>Remind</span>
+            <input type="checkbox" id="card-toggle-outreach" checked onchange="toggleSectionReminder('outreach', this.checked)" class="w-4 h-4 rounded text-indigo-600 cursor-pointer" />
+          </label>
+        </div>
+
+        <!-- Quick-Add Outreach Contact Form -->
+        <form onsubmit="handleAddOutreach(event)" class="space-y-2">
+          <div class="flex flex-col sm:flex-row gap-2">
+            <input type="text" id="outreach-name-input" required placeholder="Person's name..." class="flex-1 px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <select id="outreach-freq-input" class="px-3 py-2.5 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-700">
+              <option value="1">Daily</option>
+              <option value="3">Every 3d</option>
+              <option value="7" selected>Weekly</option>
+              <option value="14">Biweekly</option>
+              <option value="30">Monthly</option>
+            </select>
+          </div>
+          <div class="flex gap-2">
+            <input type="text" id="outreach-note-input" placeholder="Method or note (e.g., Text, Call about project)..." class="flex-1 px-3.5 py-2 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <button type="submit" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition cursor-pointer shrink-0">
+              Add
+            </button>
+          </div>
+        </form>
+
+        <!-- Outreach Contacts List -->
+        <div id="outreach-list" class="space-y-2.5"></div>
+      </section>
+
+      <!-- SECTION C: TO-DO LISTS (Spans full width on desktop for clean checklist cards) -->
+      <section aria-label="To-Do Lists" class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs font-bold">☰</span>
+            <h2 class="text-base font-bold text-slate-900">To-Do Lists</h2>
+          </div>
+
+          <div class="flex items-center gap-4">
+            <label class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+              <span>Remind</span>
+              <input type="checkbox" id="card-toggle-todos" checked onchange="toggleSectionReminder('todos', this.checked)" class="w-4 h-4 rounded text-indigo-600 cursor-pointer" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Quick-Create Named Checklist -->
+        <form onsubmit="handleAddTodoList(event)" class="flex flex-col sm:flex-row gap-2">
+          <input type="text" id="new-list-title" required placeholder="New checklist name (e.g., Errands, Work Follow-Ups)..." class="flex-1 px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          <button type="submit" class="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition cursor-pointer shrink-0">
+            + New List
+          </button>
+        </form>
+
+        <!-- Checklists Grid -->
+        <div id="todo-lists-container" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </section>
+    </div>
+
+    <!-- 2. DAILY REMINDER SCHEDULE CARD (At Bottom) -->
+    <section aria-label="Reminder Schedule" class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-sm sm:text-base font-bold text-slate-900">Daily Reminder Schedule</h2>
+          <p class="text-xs text-slate-500">Choose how many times a day or pick exact times to get nudged</p>
+        </div>
+
+        <!-- Master Reminders ON/OFF Switch -->
+        <label class="inline-flex items-center gap-2.5 cursor-pointer select-none bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl">
+          <span id="master-status-text" class="text-xs font-bold text-indigo-700">Reminders ON</span>
+          <div class="relative inline-block w-11 h-6">
+            <input type="checkbox" id="master-toggle" checked onchange="toggleMasterReminders(this.checked)" class="sr-only peer" />
+            <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:bg-indigo-600 transition-colors"></div>
+            <div class="absolute left-0.5 top-0.5 bg-white w-5 h-5 rounded-full transition-transform peer-checked:translate-x-5 shadow-xs"></div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Frequency Presets (1x, 2x, 3x, 4x) + Specific Time Pills -->
+      <div id="schedule-controls-body" class="space-y-3 pt-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-semibold text-slate-500 mr-1">Times a day:</span>
+          <button type="button" onclick="applyFrequencyPreset(1)" data-preset="1" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 transition cursor-pointer">1x (9 AM)</button>
+          <button type="button" onclick="applyFrequencyPreset(2)" data-preset="2" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 transition cursor-pointer">2x (9 AM, 5 PM)</button>
+          <button type="button" onclick="applyFrequencyPreset(3)" data-preset="3" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 transition cursor-pointer">3x (9, 1, 5)</button>
+          <button type="button" onclick="applyFrequencyPreset(4)" data-preset="4" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-slate-700 transition cursor-pointer">4x (9, 12, 3, 7)</button>
+        </div>
+
+        <!-- Editable Daily Times Row -->
+        <div class="flex flex-wrap items-center gap-2">
+          <div id="schedule-times-list" class="flex flex-wrap items-center gap-2"></div>
+
+          <!-- Add Specific Time -->
+          <form onsubmit="handleAddTime(event)" class="inline-flex items-center gap-1.5">
+            <input type="time" id="new-time-input" value="16:00" required class="px-2.5 py-1.5 text-xs font-medium rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <button type="submit" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition cursor-pointer">
+              + Time
+            </button>
+          </form>
+        </div>
+
+        <!-- Section-Level Reminder ON/OFF Toggles -->
+        <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+            <span class="text-xs font-semibold text-slate-500">Include in reminders:</span>
+
+            <label class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer text-xs font-medium text-slate-700">
+              <input type="checkbox" id="sec-toggle-tasks" checked onchange="toggleSectionReminder('tasks', this.checked)" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+              <span>Tasks</span>
+            </label>
+
+            <label class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer text-xs font-medium text-slate-700">
+              <input type="checkbox" id="sec-toggle-outreach" checked onchange="toggleSectionReminder('outreach', this.checked)" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+              <span>Outreach</span>
+            </label>
+
+            <label class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50/70 cursor-pointer text-xs font-medium text-slate-700">
+              <input type="checkbox" id="sec-toggle-todos" checked onchange="toggleSectionReminder('todos', this.checked)" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+              <span>To-Do Lists</span>
+            </label>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button type="button" id="sched-notif-btn" onclick="handleEnableNotifications()" class="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition cursor-pointer">
+              <span id="sched-notif-dot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+              <span id="sched-notif-text">Enable Push Alerts</span>
+            </button>
+            <button type="button" id="sched-sound-btn" onclick="toggleSound()" class="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition cursor-pointer">
+              <span id="sched-sound-label">🔔 Chime On</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Subtle Bottom Utility Bar -->
+    <footer class="pt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+      <span id="footer-sync-info">Saved on this device · works offline</span>
+      <button type="button" id="clear-samples-btn" onclick="clearSampleItems()" class="text-slate-500 hover:text-rose-600 underline cursor-pointer">
+        Clear Sample Items
+      </button>
+    </footer>
+  </main>
+
+  <!-- ==================== PHONE SETUP & .ICS CALENDAR EXPORT MODAL ==================== -->
+  <div id="phone-modal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-[1px] z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 max-w-md w-full shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-bold text-slate-900">Use on Phone &amp; Guarantee Alerts</h3>
+          <p class="text-xs text-slate-500">Install as an app + export lock-screen calendar alerts</p>
+        </div>
+        <button type="button" onclick="closePhoneModal()" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 cursor-pointer">✕</button>
+      </div>
+
+      <div class="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs text-slate-600 leading-relaxed">
+        <!-- Guaranteed Native Lock-Screen Notifications via .ICS -->
+        <div class="p-4 rounded-xl bg-indigo-50 border border-indigo-100 space-y-2.5">
+          <div class="flex items-center gap-2 text-indigo-900 font-bold text-sm">
+            <span>📅</span>
+            <span>1-Click Lock-Screen Calendar Reminders</span>
+          </div>
+          <p class="text-indigo-800/90">
+            Mobile browsers pause web tabs when your phone is locked. Download a recurring <strong>.ics Calendar file</strong> for your chosen daily reminder times (<span id="modal-times-preview" class="font-semibold">09:00, 13:00, 17:00</span>) so iOS/Android gives you reliable lock-screen push notifications even when Safari or Chrome is closed:
+          </p>
+          <button type="button" onclick="downloadICSReminders()" class="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-xs transition cursor-pointer">
+            ⬇️ Download .ICS Daily Reminder Schedule
+          </button>
+        </div>
+
+        <!-- Step-by-step iPhone & Android Home Screen Guide -->
+        <div class="space-y-3">
+          <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+            <h4 class="font-bold text-slate-900 text-xs mb-1">🍎 iPhone (Safari)</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-600">
+              <li>Open this page in <strong>Safari</strong> on your iPhone.</li>
+              <li>Tap the <strong>Share</strong> button (square with upward arrow) at the bottom.</li>
+              <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+              <li>Open <strong>Daily Pulse</strong> from your Home Screen and tap <strong>Tap to Enable</strong> at the top for push alerts.</li>
+            </ol>
+          </div>
+
+          <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+            <h4 class="font-bold text-slate-900 text-xs mb-1">🤖 Android (Chrome)</h4>
+            <ol class="list-decimal list-inside space-y-1 text-slate-600">
+              <li>Open this page in <strong>Chrome</strong> on your Android phone.</li>
+              <li>Tap the <strong>⋮ menu</strong> in the top-right corner.</li>
+              <li>Tap <strong>Add to Home screen</strong> or <strong>Install app</strong>.</li>
+              <li>Tap <strong>Tap to Enable</strong> in the app header to allow system notifications.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+        <button type="button" onclick="closePhoneModal()" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold cursor-pointer">
+          Got It
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== STORAGE / SYNC INFO MODAL ==================== -->
+  <div id="sync-modal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-[1px] z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-5 shadow-xl space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 id="sync-modal-title" class="text-base font-bold text-slate-900">Saved on This Device</h3>
+        <button type="button" onclick="closeSyncModal()" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 cursor-pointer">✕</button>
+      </div>
+
+      <!-- Local-only mode (default) -->
+      <div id="local-sync-block" class="space-y-3">
+        <p class="text-xs text-slate-600 leading-relaxed">
+          Your tasks, outreach contacts, lists and schedule are saved in this browser on this device, and the app works with no internet connection.
+          Each device (phone, computer) keeps its own copy. To move your data to another device, download a backup here and restore it there.
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" onclick="downloadBackup()" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition cursor-pointer">⬇️ Download Backup</button>
+          <label class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer">
+            ⬆️ Restore Backup
+            <input type="file" id="restore-input" accept="application/json,.json" onchange="restoreBackup(this)" class="hidden" />
+          </label>
+        </div>
+      </div>
+
+      <!-- Cloud sync mode (only shown when a Firebase config is added in config.js) -->
+      <div id="cloud-sync-block" class="hidden space-y-3">
+        <p class="text-xs text-slate-600 leading-relaxed">
+          Your reminders sync in real time via Cloud Firestore. Sign in with the same account on both your phone and computer—or link devices using your Sync Code below.
+        </p>
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+          <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active Sync Profile ID</div>
+          <div class="flex items-center justify-between gap-2">
+            <code id="sync-uid-display" class="text-xs font-mono text-slate-800 break-all">Loading...</code>
+            <button type="button" onclick="copySyncId()" class="shrink-0 px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 cursor-pointer">
+              Copy
+            </button>
+          </div>
+        </div>
+        <button type="button" id="google-signin-btn" onclick="signInWithGoogleAccount()" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition cursor-pointer">
+          Sign in with Google
+        </button>
+      </div>
+
+      <div class="flex justify-end pt-1">
+        <button type="button" onclick="closeSyncModal()" class="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optional cloud sync config (empty by default = local-only) -->
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
