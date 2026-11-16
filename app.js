@@ -27,6 +27,31 @@
     let unsubscribeSnapshot = null;
     let isRemoteUpdating = false;
 
+    // Schedule tab defaults (declared early: the starter state uses them)
+    const DEFAULT_DAY_PARTS = [
+      { id: 'morning', name: 'Morning', icon: '🌅', start: '07:00', end: '10:00', remind: '07:30' },
+      { id: 'midday', name: 'Midday', icon: '☀️', start: '11:00', end: '13:00', remind: '11:30' },
+      { id: 'afternoon', name: 'Afternoon', icon: '🌤️', start: '13:00', end: '17:00', remind: '14:00' },
+      { id: 'evening', name: 'Evening', icon: '🌙', start: '18:00', end: '21:00', remind: '19:00' }
+    ];
+    const DEFAULT_CATEGORIES = [
+      { id: 'tasks', name: 'Tasks', color: 'indigo', builtin: true },
+      { id: 'followups', name: 'Follow-ups', color: 'amber', builtin: true },
+      { id: 'checklists', name: 'Checklists', color: 'emerald', builtin: true }
+    ];
+    // Literal class strings so the Tailwind build keeps them
+    const CATEGORY_COLORS = {
+      indigo: { dot: 'bg-indigo-500', chip: 'bg-indigo-50 text-indigo-700 border-indigo-200', label: 'Indigo' },
+      amber: { dot: 'bg-amber-500', chip: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Amber' },
+      emerald: { dot: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Green' },
+      sky: { dot: 'bg-sky-500', chip: 'bg-sky-50 text-sky-700 border-sky-200', label: 'Blue' },
+      rose: { dot: 'bg-rose-500', chip: 'bg-rose-50 text-rose-700 border-rose-200', label: 'Red' },
+      violet: { dot: 'bg-violet-500', chip: 'bg-violet-50 text-violet-700 border-violet-200', label: 'Purple' },
+      slate: { dot: 'bg-slate-500', chip: 'bg-slate-100 text-slate-700 border-slate-200', label: 'Gray' }
+    };
+    const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const ICS_DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
     function localISODate(d) {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
@@ -100,6 +125,16 @@
             ]
           }
         ],
+        // Schedule tab
+        dayParts: DEFAULT_DAY_PARTS.map(p => ({ ...p })),
+        categories: DEFAULT_CATEGORIES.map(c => ({ ...c })),
+        partRemindersEnabled: true,
+        scheduleItems: [
+          { id: 's-sample-1', title: 'Review top 3 priorities for today', linkType: 'task', linkId: 't-sample-1', categoryId: 'tasks', partId: 'morning', repeat: { type: 'weekdays' }, time: '', remind: true, startDate: getDaysAgoISO(0), isSample: true },
+          { id: 's-sample-2', title: 'Alex Morgan', linkType: 'outreach', linkId: 'o-sample-1', categoryId: 'followups', partId: 'afternoon', repeat: { type: 'days', days: [2, 4] }, time: '15:00', remind: true, startDate: getDaysAgoISO(0), isSample: true }
+        ],
+        scheduleDone: {}, // { 'YYYY-MM-DD': { itemId: true } }
+        schemaVersion: 2,
         triggeredSlots: {}, // tracks "YYYY-MM-DD_HH:MM" to avoid duplicate alerts
         updatedAt: Date.now()
       };
@@ -120,7 +155,14 @@
         outreach: Array.isArray(data.outreach) ? data.outreach : [],
         todoLists: Array.isArray(data.todoLists) ? data.todoLists.map(l => ({ ...l, items: Array.isArray(l.items) ? l.items : [] })) : [],
         scheduleTimes: Array.isArray(data.scheduleTimes) ? data.scheduleTimes : ['09:00', '13:00', '17:00'],
-        triggeredSlots: data.triggeredSlots || {}
+        triggeredSlots: data.triggeredSlots || {},
+        // Schedule tab (added in v2; older saved data gets defaults and no sample items)
+        dayParts: normalizeDayParts(data.dayParts),
+        categories: normalizeCategories(data.categories),
+        partRemindersEnabled: data.partRemindersEnabled !== false,
+        scheduleItems: Array.isArray(data.scheduleItems) ? data.scheduleItems.filter(i => i && i.id) : [],
+        scheduleDone: data.scheduleDone && typeof data.scheduleDone === 'object' ? data.scheduleDone : {},
+        schemaVersion: 2
       };
     }
 
@@ -141,6 +183,9 @@
         Object.keys(state.triggeredSlots || {}).forEach(k => {
           if (k.slice(0, 10) < today) delete state.triggeredSlots[k];
         });
+        // Keep 120 days of schedule check-offs
+        const cutoff = getDaysAgoISO(120);
+        Object.keys(state.scheduleDone || {}).forEach(d => { if (d < cutoff) delete state.scheduleDone[d]; });
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {
         console.warn('Could not save to this device:', e);
@@ -494,6 +539,9 @@
         });
       }
 
+      // 3. Schedule tab: day-part reminders and exact item times
+      if (checkScheduledParts(todayISO, currentHHMM, isForegroundCatchUp)) firedAny = true;
+
       if (firedAny) {
         persistState();
       }
@@ -520,6 +568,9 @@
         const left = state.todoLists.filter(l => l.remind).reduce((n, l) => n + l.items.filter(i => !i.done).length, 0);
         if (left) parts.push(`${left} checklist item${left === 1 ? '' : 's'} left`);
       }
+      const today = getDaysAgoISO(0);
+      const openScheduled = itemsForDate(today).filter(i => !isItemDone(i, today)).length;
+      if (openScheduled) parts.push(`${openScheduled} scheduled item${openScheduled === 1 ? '' : 's'} left today`);
       return parts.length ? parts.join(' · ') : 'All caught up. Nice work!';
     }
 
@@ -772,6 +823,7 @@
       state.tasks = state.tasks.filter(t => !t.isSample);
       state.outreach = state.outreach.filter(o => !o.isSample);
       state.todoLists = state.todoLists.filter(l => !l.isSample);
+      state.scheduleItems = state.scheduleItems.filter(i => !i.isSample);
       persistState();
     };
 
@@ -782,7 +834,8 @@
       const preview = state.scheduleTimes.length > 0
         ? state.scheduleTimes.map(format12Hour).join(', ')
         : '9:00 AM';
-      document.getElementById('modal-times-preview').textContent = preview;
+      document.getElementById('modal-times-preview').textContent = preview
+        + (state.scheduleItems.length ? `, plus your ${state.scheduleItems.length} scheduled item${state.scheduleItems.length === 1 ? '' : 's'}` : '');
       document.getElementById('phone-modal').classList.remove('hidden');
     };
 
@@ -880,6 +933,7 @@
         'PRODID:-//Daily Pulse//Reminder Schedule//EN',
         'CALSCALE:GREGORIAN',
         ...events,
+        ...buildScheduleICSEvents(),
         'END:VCALENDAR'
       ].join('\r\n');
 
@@ -1071,9 +1125,600 @@
       }
 
       // Show/Hide Clear Sample Items button
-      const hasSamples = state.tasks.some(t => t.isSample) || state.outreach.some(o => o.isSample) || state.todoLists.some(l => l.isSample);
+      renderSchedule();
+
+      const hasSamples = state.scheduleItems.some(i => i.isSample) || state.tasks.some(t => t.isSample) || state.outreach.some(o => o.isSample) || state.todoLists.some(l => l.isSample);
       document.getElementById('clear-samples-btn').style.display = hasSamples ? 'inline' : 'none';
     }
+
+    /*************************************************************************
+     * SCHEDULE TAB — day parts × categories, repeating items, per-day done state
+     *************************************************************************/
+    function normalizeDayParts(parts) {
+      const byId = {};
+      (Array.isArray(parts) ? parts : []).forEach(p => { if (p && p.id) byId[p.id] = p; });
+      return DEFAULT_DAY_PARTS.map(d => ({ ...d, ...(byId[d.id] || {}), id: d.id, icon: d.icon }));
+    }
+
+    function normalizeCategories(cats) {
+      const list = Array.isArray(cats) ? cats.filter(c => c && c.id && c.name) : [];
+      const out = DEFAULT_CATEGORIES.map(d => ({ ...d, ...(list.find(c => c.id === d.id) || {}), builtin: true }));
+      list.forEach(c => { if (!out.some(o => o.id === c.id)) out.push({ ...c, builtin: false, color: CATEGORY_COLORS[c.color] ? c.color : 'slate' }); });
+      return out;
+    }
+
+    function parseISODate(iso) {
+      const [y, m, d] = iso.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+
+    function addDaysISO(iso, n) {
+      const d = parseISODate(iso);
+      d.setDate(d.getDate() + n);
+      return localISODate(d);
+    }
+
+    function nowHHMM() {
+      const n = new Date();
+      return `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`;
+    }
+
+    function getPart(id) {
+      return state.dayParts.find(p => p.id === id) || state.dayParts[0];
+    }
+
+    function getCategory(id) {
+      return state.categories.find(c => c.id === id) || { id, name: 'Other', color: 'slate' };
+    }
+
+    function itemOccursOn(item, iso) {
+      const r = item.repeat || { type: 'daily' };
+      if (r.type === 'once') return r.date === iso;
+      if (item.startDate && iso < item.startDate) return false;
+      const dow = parseISODate(iso).getDay();
+      if (r.type === 'weekdays') return dow >= 1 && dow <= 5;
+      if (r.type === 'days') return Array.isArray(r.days) && r.days.includes(dow);
+      return true; // daily
+    }
+
+    function itemsForDate(iso) {
+      return state.scheduleItems.filter(i => itemOccursOn(i, iso));
+    }
+
+    function isItemDone(item, iso) {
+      return !!(state.scheduleDone[iso] && state.scheduleDone[iso][item.id]);
+    }
+
+    // Linked items show the live title of the task / contact / checklist they point to
+    function itemDisplay(item) {
+      if (item.linkType === 'task') {
+        const t = state.tasks.find(x => x.id === item.linkId);
+        return { title: t ? t.title : item.title, sub: t && t.priority ? `${t.priority} priority` : (t ? '' : 'Task was deleted') };
+      }
+      if (item.linkType === 'outreach') {
+        const c = state.outreach.find(x => x.id === item.linkId);
+        return { title: c ? `Reach out: ${c.name}` : item.title, sub: c ? (c.note || '') : 'Contact was deleted' };
+      }
+      if (item.linkType === 'list') {
+        const l = state.todoLists.find(x => x.id === item.linkId);
+        if (!l) return { title: item.title, sub: 'Checklist was deleted' };
+        const left = l.items.filter(i => !i.done).length;
+        return { title: `Checklist: ${l.title}`, sub: `${left} of ${l.items.length} items left` };
+      }
+      return { title: item.title, sub: item.note || '' };
+    }
+
+    function repeatLabel(item) {
+      const r = item.repeat || { type: 'daily' };
+      if (r.type === 'once') return 'One time';
+      if (r.type === 'weekdays') return 'Weekdays';
+      if (r.type === 'days') {
+        const days = (r.days || []).slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+        return days.length === 7 ? 'Daily' : days.map(d => DOW_SHORT[d]).join(', ');
+      }
+      return 'Daily';
+    }
+
+    function isItemOverdue(item, iso) {
+      if (isItemDone(item, iso)) return false;
+      const today = getDaysAgoISO(0);
+      if (iso < today) return true;
+      if (iso > today) return false;
+      const now = nowHHMM();
+      if (item.time) return item.time < now;
+      return getPart(item.partId).end <= now;
+    }
+
+    function partStatus(part, iso, items) {
+      const today = getDaysAgoISO(0);
+      const allDone = items.length > 0 && items.every(i => isItemDone(i, iso));
+      if (allDone) return 'done';
+      if (iso < today) return items.length ? 'overdue' : 'past';
+      if (iso > today) return 'upcoming';
+      const now = nowHHMM();
+      if (now >= part.end) return items.some(i => !isItemDone(i, iso)) ? 'overdue' : 'past';
+      if (now >= part.start) return 'now';
+      return 'upcoming';
+    }
+
+    function partRangeLabel(p) {
+      return `${format12Hour(p.start)} – ${format12Hour(p.end)}`;
+    }
+
+    function selectedScheduleDate() {
+      if (!uiState.scheduleDate) uiState.scheduleDate = getDaysAgoISO(0);
+      return uiState.scheduleDate;
+    }
+
+    const uiState = { scheduleDate: null, tab: 'home' };
+
+    /* ---------- Tabs ---------- */
+    window.switchTab = function (tab) {
+      uiState.tab = tab === 'schedule' ? 'schedule' : 'home';
+      try { localStorage.setItem('daily-pulse-tab', uiState.tab); } catch (e) {}
+      if (location.hash !== '#' + uiState.tab) history.replaceState(null, '', '#' + uiState.tab);
+      document.getElementById('view-home').classList.toggle('hidden', uiState.tab !== 'home');
+      document.getElementById('view-schedule').classList.toggle('hidden', uiState.tab !== 'schedule');
+      const on = 'flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold border border-indigo-600 bg-indigo-600 text-white transition cursor-pointer';
+      const off = 'flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition cursor-pointer';
+      document.getElementById('tab-btn-home').className = uiState.tab === 'home' ? on : off;
+      document.getElementById('tab-btn-schedule').className = uiState.tab === 'schedule' ? on : off;
+      document.getElementById('tab-btn-home').setAttribute('aria-selected', String(uiState.tab === 'home'));
+      document.getElementById('tab-btn-schedule').setAttribute('aria-selected', String(uiState.tab === 'schedule'));
+      if (uiState.tab === 'schedule') renderSchedule();
+      window.scrollTo(0, 0);
+    };
+
+    function initTab() {
+      let tab = location.hash === '#schedule' ? 'schedule' : location.hash === '#home' ? 'home' : null;
+      if (!tab) { try { tab = localStorage.getItem('daily-pulse-tab'); } catch (e) {} }
+      switchTab(tab || 'home');
+    }
+
+    /* ---------- Day navigation ---------- */
+    window.setScheduleDate = function (iso) {
+      uiState.scheduleDate = iso;
+      renderSchedule();
+    };
+    window.shiftScheduleWeek = function (n) {
+      uiState.scheduleDate = addDaysISO(selectedScheduleDate(), 7 * n);
+      renderSchedule();
+    };
+    window.scheduleGoToday = function () {
+      uiState.scheduleDate = getDaysAgoISO(0);
+      renderSchedule();
+    };
+
+    /* ---------- Done / undone ---------- */
+    window.toggleScheduleDone = function (itemId, iso) {
+      const item = state.scheduleItems.find(i => i.id === itemId);
+      if (!item) return;
+      if (!state.scheduleDone[iso]) state.scheduleDone[iso] = {};
+      const nowDone = !state.scheduleDone[iso][itemId];
+      if (nowDone) state.scheduleDone[iso][itemId] = true;
+      else delete state.scheduleDone[iso][itemId];
+      if (!Object.keys(state.scheduleDone[iso]).length) delete state.scheduleDone[iso];
+
+      // Keep the linked item in step
+      if (item.linkType === 'outreach' && nowDone) {
+        const c = state.outreach.find(x => x.id === item.linkId);
+        if (c && iso >= (c.lastContacted || '')) c.lastContacted = iso;
+      }
+      if (item.linkType === 'task' && (item.repeat || {}).type === 'once') {
+        const t = state.tasks.find(x => x.id === item.linkId);
+        if (t) t.completed = nowDone;
+      }
+      persistState();
+    };
+
+    /* ---------- Add / edit modal ---------- */
+    function fillSelect(id, options, value) {
+      const el = document.getElementById(id);
+      el.innerHTML = options.map(o => `<option value="${escapeHTML(o.value)}">${escapeHTML(o.label)}</option>`).join('');
+      if (value !== undefined && options.some(o => o.value === value)) el.value = value;
+    }
+
+    function linkOptions(source) {
+      if (source === 'task') return state.tasks.map(t => ({ value: t.id, label: t.title + (t.completed ? ' (done)' : '') }));
+      if (source === 'outreach') return state.outreach.map(c => ({ value: c.id, label: c.name }));
+      if (source === 'list') return state.todoLists.map(l => ({ value: l.id, label: l.title }));
+      return [];
+    }
+
+    const SOURCE_CATEGORY = { task: 'tasks', outreach: 'followups', list: 'checklists' };
+
+    window.onScheduleSourceChange = function (keepCategory) {
+      const source = document.getElementById('sched-source').value;
+      const isNew = source === 'new';
+      document.getElementById('sched-title-wrap').classList.toggle('hidden', !isNew);
+      document.getElementById('sched-link-wrap').classList.toggle('hidden', isNew);
+      document.getElementById('sched-title').required = isNew;
+      if (!isNew) {
+        const opts = linkOptions(source);
+        fillSelect('sched-link', opts.length ? opts : [{ value: '', label: 'Nothing here yet — add one on the Home tab' }]);
+      }
+      if (!keepCategory && SOURCE_CATEGORY[source]) document.getElementById('sched-category').value = SOURCE_CATEGORY[source];
+    };
+
+    window.onScheduleRepeatChange = function () {
+      const r = document.getElementById('sched-repeat').value;
+      document.getElementById('sched-days-wrap').classList.toggle('hidden', r !== 'days');
+      document.getElementById('sched-date-wrap').classList.toggle('hidden', r !== 'once');
+    };
+
+    window.onSchedulePartChange = function () {
+      const p = getPart(document.getElementById('sched-part').value);
+      document.getElementById('sched-time-hint').textContent = `Optional. ${p.name} is ${partRangeLabel(p)}; its reminder is at ${format12Hour(p.remind)}.`;
+    };
+
+    window.openScheduleItemModal = function (itemId, presetPartId) {
+      const item = itemId ? state.scheduleItems.find(i => i.id === itemId) : null;
+      const iso = selectedScheduleDate();
+      fillSelect('sched-category', state.categories.map(c => ({ value: c.id, label: c.name })), item ? item.categoryId : 'tasks');
+      fillSelect('sched-part', state.dayParts.map(p => ({ value: p.id, label: `${p.icon} ${p.name}` })), item ? item.partId : (presetPartId || currentOrNextPartId()));
+      document.getElementById('sched-edit-id').value = item ? item.id : '';
+      document.getElementById('sched-modal-title').textContent = item ? 'Edit Scheduled Item' : 'Schedule an Item';
+      document.getElementById('sched-delete-btn').classList.toggle('hidden', !item);
+      const source = item ? ({ task: 'task', outreach: 'outreach', list: 'list' }[item.linkType] || 'new') : 'new';
+      document.getElementById('sched-source').value = source;
+      document.getElementById('sched-title').value = item && !item.linkType ? item.title : '';
+      onScheduleSourceChange(!!item);
+      if (item && item.linkId) document.getElementById('sched-link').value = item.linkId;
+      const r = item ? item.repeat : { type: 'daily' };
+      document.getElementById('sched-repeat').value = r.type;
+      document.querySelectorAll('input[name="sched-day"]').forEach(cb => {
+        cb.checked = r.type === 'days' ? (r.days || []).includes(Number(cb.value)) : false;
+      });
+      document.getElementById('sched-date').value = r.type === 'once' ? r.date : iso;
+      document.getElementById('sched-time').value = item ? (item.time || '') : '';
+      document.getElementById('sched-remind').checked = item ? item.remind !== false : true;
+      onScheduleRepeatChange();
+      onSchedulePartChange();
+      document.getElementById('sched-item-modal').classList.remove('hidden');
+    };
+
+    window.closeScheduleItemModal = function () {
+      document.getElementById('sched-item-modal').classList.add('hidden');
+    };
+
+    function currentOrNextPartId() {
+      const now = nowHHMM();
+      const p = state.dayParts.find(p => now < p.end);
+      return (p || state.dayParts[0]).id;
+    }
+
+    window.saveScheduleItem = function (e) {
+      e.preventDefault();
+      const editId = document.getElementById('sched-edit-id').value;
+      const source = document.getElementById('sched-source').value;
+      const repeatType = document.getElementById('sched-repeat').value;
+      const repeat = { type: repeatType };
+      if (repeatType === 'days') {
+        repeat.days = Array.from(document.querySelectorAll('input[name="sched-day"]:checked')).map(cb => Number(cb.value));
+        if (!repeat.days.length) { showBanner('Pick Some Days', 'Choose at least one day of the week.'); return; }
+      }
+      if (repeatType === 'once') {
+        repeat.date = document.getElementById('sched-date').value;
+        if (!repeat.date) { showBanner('Pick a Date', 'Choose the date for this one-time item.'); return; }
+      }
+      let title = '', linkType = null, linkId = null;
+      if (source === 'new') {
+        title = document.getElementById('sched-title').value.trim();
+        if (!title) return;
+      } else {
+        linkId = document.getElementById('sched-link').value;
+        if (!linkId) { showBanner('Nothing to Link', 'Add that item on the Home tab first, or choose "New item".'); return; }
+        linkType = source;
+        const opt = linkOptions(source).find(o => o.value === linkId);
+        title = opt ? opt.label : 'Linked item';
+      }
+      const fields = {
+        title, linkType, linkId, repeat,
+        categoryId: document.getElementById('sched-category').value,
+        partId: document.getElementById('sched-part').value,
+        time: document.getElementById('sched-time').value || '',
+        remind: document.getElementById('sched-remind').checked
+      };
+      const existing = editId && state.scheduleItems.find(i => i.id === editId);
+      if (existing) Object.assign(existing, fields);
+      else state.scheduleItems.push({ id: 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), startDate: getDaysAgoISO(0), isSample: false, ...fields });
+      if (repeatType === 'once') uiState.scheduleDate = repeat.date;
+      closeScheduleItemModal();
+      persistState();
+      showBanner(existing ? 'Schedule Updated' : 'Scheduled', `${fields.title} · ${getPart(fields.partId).name} · ${repeatLabel({ repeat })}`);
+    };
+
+    window.deleteScheduleItem = function () {
+      const id = document.getElementById('sched-edit-id').value;
+      if (!id || !confirm('Remove this item from your schedule?')) return;
+      state.scheduleItems = state.scheduleItems.filter(i => i.id !== id);
+      Object.keys(state.scheduleDone).forEach(d => { delete state.scheduleDone[d][id]; });
+      closeScheduleItemModal();
+      persistState();
+    };
+
+    /* ---------- Settings: day parts & categories ---------- */
+    window.updateDayPart = function (id, field, value) {
+      const p = state.dayParts.find(x => x.id === id);
+      if (!p || !value) return;
+      if (field === 'name') value = value.trim().slice(0, 24) || p.name;
+      p[field] = value;
+      persistState();
+    };
+
+    window.resetDayParts = function () {
+      document.activeElement && document.activeElement.blur();
+      state.dayParts = normalizeDayParts([]);
+      persistState();
+    };
+
+    window.togglePartReminders = function (on) {
+      state.partRemindersEnabled = on;
+      persistState();
+    };
+
+    window.handleAddCategory = function (e) {
+      e.preventDefault();
+      const name = document.getElementById('new-category-name').value.trim();
+      const color = document.getElementById('new-category-color').value;
+      if (!name) return;
+      if (state.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) { showBanner('Already There', `You already have a "${name}" category.`); return; }
+      state.categories.push({ id: 'c-' + Date.now(), name: name.slice(0, 30), color, builtin: false });
+      document.getElementById('new-category-name').value = '';
+      document.activeElement && document.activeElement.blur();
+      persistState();
+    };
+
+    window.deleteCategory = function (id) {
+      const cat = state.categories.find(c => c.id === id);
+      if (!cat || cat.builtin) return;
+      const used = state.scheduleItems.filter(i => i.categoryId === id).length;
+      if (!confirm(used ? `Delete "${cat.name}"? Its ${used} scheduled item(s) move to Tasks.` : `Delete "${cat.name}"?`)) return;
+      state.scheduleItems.forEach(i => { if (i.categoryId === id) i.categoryId = 'tasks'; });
+      state.categories = state.categories.filter(c => c.id !== id);
+      document.activeElement && document.activeElement.blur();
+      persistState();
+    };
+
+    /* ---------- Reminders ---------- */
+    function partSummary(part, iso) {
+      const items = itemsForDate(iso).filter(i => i.partId === part.id && i.remind !== false && !isItemDone(i, iso));
+      if (!items.length) return null;
+      const groups = {};
+      items.forEach(i => { (groups[i.categoryId] = groups[i.categoryId] || []).push(itemDisplay(i).title.replace(/^(Checklist|Reach out): /, '')); });
+      return Object.keys(groups).map(cid => `${getCategory(cid).name}: ${groups[cid].join(', ')}`).join(' · ');
+    }
+
+    function checkScheduledParts(todayISO, currentHHMM, isForegroundCatchUp) {
+      let fired = false;
+      if (state.partRemindersEnabled === false) return false;
+      state.dayParts.forEach(part => {
+        const key = `${todayISO}_part_${part.id}`;
+        if (state.triggeredSlots[key]) return;
+        const exact = part.remind === currentHHMM;
+        const missed = isForegroundCatchUp && part.remind < currentHHMM && currentHHMM < part.end;
+        if (!exact && !missed) return;
+        const summary = partSummary(part, todayISO);
+        state.triggeredSlots[key] = true;
+        fired = true;
+        if (summary) fireReminderAlert(`${part.icon} ${part.name} (${partRangeLabel(part)})`, summary);
+      });
+      itemsForDate(todayISO).forEach(item => {
+        if (!item.time || item.remind === false || isItemDone(item, todayISO)) return;
+        const key = `${todayISO}_sitem_${item.id}_${item.time}`;
+        if (state.triggeredSlots[key]) return;
+        const part = getPart(item.partId);
+        const missed = isForegroundCatchUp && item.time < currentHHMM && currentHHMM < part.end;
+        if (item.time !== currentHHMM && !missed) return;
+        state.triggeredSlots[key] = true;
+        fired = true;
+        fireReminderAlert(`Due ${format12Hour(item.time)} · ${getCategory(item.categoryId).name}`, itemDisplay(item).title);
+      });
+      return fired;
+    }
+
+    /* ---------- .ics export: one recurring event per scheduled item ---------- */
+    function icsEscape(s) {
+      return String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+    }
+
+    function buildScheduleICSEvents() {
+      const today = getDaysAgoISO(0);
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      return state.scheduleItems.map(item => {
+        const part = getPart(item.partId);
+        const r = item.repeat || { type: 'daily' };
+        let first = r.type === 'once' ? r.date : null;
+        if (!first) {
+          for (let k = 0; k < 7; k++) { const d = addDaysISO(today, k); if (itemOccursOn(item, d)) { first = d; break; } }
+        }
+        if (!first) return null;
+        const t = item.time || part.remind;
+        const [hh, mm] = t.split(':').map(Number);
+        const end = new Date(2000, 0, 1, hh, mm + 15);
+        const ymd = first.replace(/-/g, '');
+        const lines = [
+          'BEGIN:VEVENT',
+          `UID:daily-pulse-item-${item.id}@dailypulse.app`,
+          `DTSTAMP:${stamp}`,
+          `DTSTART:${ymd}T${String(hh).padStart(2, '0')}${String(mm).padStart(2, '0')}00`,
+          `DTEND:${ymd}T${String(end.getHours()).padStart(2, '0')}${String(end.getMinutes()).padStart(2, '0')}00`
+        ];
+        if (r.type === 'daily') lines.push('RRULE:FREQ=DAILY');
+        if (r.type === 'weekdays') lines.push('RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+        if (r.type === 'days') lines.push(`RRULE:FREQ=WEEKLY;BYDAY=${(r.days || []).map(d => ICS_DAYS[d]).join(',')}`);
+        const disp = itemDisplay(item);
+        lines.push(
+          `SUMMARY:${icsEscape(disp.title)}`,
+          `DESCRIPTION:${icsEscape(`${getCategory(item.categoryId).name} · ${part.name} (${partRangeLabel(part)})${disp.sub ? ' · ' + disp.sub : ''}`)}`,
+          'BEGIN:VALARM', 'TRIGGER:-PT0M', 'ACTION:DISPLAY', `DESCRIPTION:${icsEscape(disp.title)}`, 'END:VALARM',
+          'END:VEVENT'
+        );
+        return lines.join('\r\n');
+      }).filter(Boolean);
+    }
+
+    /* ---------- Rendering ---------- */
+    function renderSchedule() {
+      const container = document.getElementById('day-parts-container');
+      if (!container) return;
+      const iso = selectedScheduleDate();
+      const today = getDaysAgoISO(0);
+      const d = parseISODate(iso);
+
+      document.getElementById('sched-date-title').textContent =
+        iso === today ? 'Today' : iso === addDaysISO(today, 1) ? 'Tomorrow' : iso === addDaysISO(today, -1) ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'long' });
+      document.getElementById('sched-date-sub').textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      document.getElementById('sched-today-btn').classList.toggle('hidden', iso === today);
+
+      // Week strip (Mon–Sun) with a dot for days that have items
+      const monday = addDaysISO(iso, -((d.getDay() + 6) % 7));
+      document.getElementById('week-strip').innerHTML = Array.from({ length: 7 }, (_, k) => {
+        const day = addDaysISO(monday, k);
+        const dd = parseISODate(day);
+        const items = itemsForDate(day);
+        const open = items.filter(i => !isItemDone(i, day)).length;
+        const dot = !items.length ? 'bg-transparent' : open === 0 ? 'bg-emerald-500' : (day < today ? 'bg-rose-500' : 'bg-indigo-400');
+        const sel = day === iso;
+        const cls = sel ? 'bg-indigo-600 border-indigo-600 text-white' : day === today ? 'bg-indigo-50 border-indigo-200 text-indigo-800' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50';
+        return `<button type="button" onclick="setScheduleDate('${day}')" data-date="${day}" class="flex flex-col items-center py-1.5 rounded-xl border text-[11px] font-semibold transition cursor-pointer ${cls}">
+            <span class="${sel ? 'text-indigo-100' : 'text-slate-400'} text-[10px] font-medium">${DOW_SHORT[dd.getDay()]}</span>
+            <span class="text-sm font-bold leading-tight">${dd.getDate()}</span>
+            <span class="w-1.5 h-1.5 rounded-full mt-0.5 ${sel && items.length ? 'bg-white' : dot}"></span>
+          </button>`;
+      }).join('');
+
+      const dayItems = itemsForDate(iso);
+      const doneCount = dayItems.filter(i => isItemDone(i, iso)).length;
+      const pct = dayItems.length ? Math.round((doneCount / dayItems.length) * 100) : 0;
+      document.getElementById('sched-progress').innerHTML = dayItems.length
+        ? `<div class="flex items-center justify-between text-[11px] font-semibold text-slate-500"><span>${doneCount} of ${dayItems.length} done</span><span>${pct}%</span></div>
+           <div class="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden mt-1"><div class="h-full bg-emerald-500 rounded-full transition-all duration-300" style="width:${pct}%"></div></div>`
+        : `<p class="text-xs text-slate-400">Nothing scheduled for this day yet. Tap <strong>+ Schedule</strong> to add a task, follow-up or anything else to a part of the day.</p>`;
+
+      const statusChip = {
+        now: '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded-md border bg-indigo-600 text-white border-indigo-600">Now</span>',
+        done: '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded-md border bg-emerald-50 text-emerald-700 border-emerald-200">All done</span>',
+        overdue: '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded-md border bg-rose-50 text-rose-700 border-rose-200">Overdue</span>',
+        upcoming: '', past: ''
+      };
+
+      container.innerHTML = state.dayParts.map(part => {
+        const items = dayItems.filter(i => i.partId === part.id)
+          .sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+        const status = partStatus(part, iso, items);
+        const ring = status === 'now' ? 'border-indigo-300 ring-2 ring-indigo-100' : status === 'overdue' ? 'border-rose-200' : 'border-slate-200';
+        const catOrder = state.categories.map(c => c.id);
+        const groups = {};
+        items.forEach(i => { (groups[i.categoryId] = groups[i.categoryId] || []).push(i); });
+        const groupIds = Object.keys(groups).sort((a, b) => {
+          const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+        const body = !items.length
+          ? `<button type="button" onclick="openScheduleItemModal(null, '${part.id}')" class="w-full py-3 rounded-xl border border-dashed border-slate-300 text-xs font-semibold text-slate-400 hover:text-indigo-600 hover:border-indigo-300 cursor-pointer">+ Add to ${escapeHTML(part.name)}</button>`
+          : groupIds.map(cid => {
+            const cat = getCategory(cid);
+            const col = CATEGORY_COLORS[cat.color] || CATEGORY_COLORS.slate;
+            return `<div class="space-y-1.5">
+                <div class="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  <span class="w-2 h-2 rounded-full ${col.dot}"></span><span>${escapeHTML(cat.name)}</span>
+                </div>
+                ${groups[cid].map(item => {
+                  const done = isItemDone(item, iso);
+                  const overdue = isItemOverdue(item, iso);
+                  const disp = itemDisplay(item);
+                  const rowCls = done ? 'border-slate-100 bg-slate-50/60 opacity-60' : overdue ? 'border-rose-200 bg-rose-50/60' : 'border-slate-200 bg-white';
+                  return `<div class="sched-item flex items-center justify-between gap-2.5 p-2.5 rounded-xl border ${rowCls}" data-item="${item.id}">
+                      <label class="flex items-center gap-3 min-w-0 flex-1 cursor-pointer">
+                        <input type="checkbox" ${done ? 'checked' : ''} onchange="toggleScheduleDone('${item.id}', '${iso}')" class="w-5 h-5 rounded-md text-indigo-600 cursor-pointer shrink-0" />
+                        <div class="min-w-0">
+                          <div class="text-sm font-medium ${done ? 'line-through text-slate-400' : 'text-slate-900'} truncate">${escapeHTML(disp.title)}</div>
+                          <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            ${item.time ? `<span class="text-[11px] font-semibold ${overdue ? 'text-rose-600' : 'text-indigo-600'}">⏰ ${format12Hour(item.time)}</span>` : ''}
+                            <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-md border bg-slate-100 text-slate-600 border-slate-200">${escapeHTML(repeatLabel(item))}</span>
+                            ${overdue ? '<span class="text-[10px] font-bold text-rose-600">Overdue</span>' : ''}
+                            ${item.remind === false ? '<span class="text-[10px] text-slate-400">🔕</span>' : ''}
+                            ${disp.sub ? `<span class="text-[11px] text-slate-500 truncate">${escapeHTML(disp.sub)}</span>` : ''}
+                          </div>
+                        </div>
+                      </label>
+                      <button type="button" onclick="openScheduleItemModal('${item.id}')" title="Edit" class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 text-xs cursor-pointer shrink-0">✎</button>
+                    </div>`;
+                }).join('')}
+              </div>`;
+          }).join('');
+        return `<section aria-label="${escapeHTML(part.name)}" data-part="${part.id}" class="bg-white rounded-2xl border ${ring} p-4 sm:p-5 shadow-2xs space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="w-7 h-7 rounded-lg bg-slate-50 flex items-center justify-center text-sm">${part.icon}</span>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1.5"><h3 class="text-base font-bold text-slate-900">${escapeHTML(part.name)}</h3>${statusChip[status]}</div>
+                  <div class="text-[11px] font-medium text-slate-500">${partRangeLabel(part)} · 🔔 ${format12Hour(part.remind)}</div>
+                </div>
+              </div>
+              ${items.length ? `<button type="button" onclick="openScheduleItemModal(null, '${part.id}')" title="Add to ${escapeHTML(part.name)}" class="w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm font-bold cursor-pointer shrink-0">+</button>` : ''}
+            </div>
+            ${body}
+          </section>`;
+      }).join('');
+
+      renderScheduleSettings();
+    }
+
+    function renderScheduleSettings() {
+      const el = document.getElementById('sched-settings-body');
+      if (!el || el.contains(document.activeElement)) return; // don't yank inputs while editing
+      el.innerHTML = `
+        <div class="space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-xs font-bold text-slate-900">Parts of the day</h4>
+            <button type="button" onclick="resetDayParts()" class="text-[11px] text-slate-500 hover:text-indigo-600 underline cursor-pointer">Reset to defaults</button>
+          </div>
+          ${state.dayParts.map(p => `
+            <div class="grid grid-cols-[1fr_auto] gap-2 p-2.5 rounded-xl border border-slate-200 bg-slate-50/60">
+              <input type="text" value="${escapeHTML(p.name)}" onchange="updateDayPart('${p.id}','name',this.value)" class="col-span-2 px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white" aria-label="${escapeHTML(p.name)} name" />
+              <div class="col-span-2 grid grid-cols-3 gap-2 text-[10px] font-semibold text-slate-500">
+                <label class="space-y-0.5"><span>Starts</span><input type="time" value="${p.start}" onchange="updateDayPart('${p.id}','start',this.value)" class="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700" /></label>
+                <label class="space-y-0.5"><span>Ends</span><input type="time" value="${p.end}" onchange="updateDayPart('${p.id}','end',this.value)" class="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700" /></label>
+                <label class="space-y-0.5"><span>Reminder</span><input type="time" value="${p.remind}" onchange="updateDayPart('${p.id}','remind',this.value)" class="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700" /></label>
+              </div>
+            </div>`).join('')}
+          <label class="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer pt-1">
+            <input type="checkbox" ${state.partRemindersEnabled !== false ? 'checked' : ''} onchange="togglePartReminders(this.checked)" class="w-4 h-4 rounded text-indigo-600 cursor-pointer" />
+            <span>Remind me at each part's reminder time with what's due</span>
+          </label>
+        </div>
+        <div class="space-y-2 pt-3 border-t border-slate-100">
+          <h4 class="text-xs font-bold text-slate-900">Categories</h4>
+          <div class="flex flex-wrap gap-2">
+            ${state.categories.map(c => {
+              const col = CATEGORY_COLORS[c.color] || CATEGORY_COLORS.slate;
+              return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold ${col.chip}">
+                  <span class="w-2 h-2 rounded-full ${col.dot}"></span>${escapeHTML(c.name)}
+                  ${c.builtin ? '' : `<button type="button" onclick="deleteCategory('${c.id}')" title="Delete category" class="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer">✕</button>`}
+                </span>`;
+            }).join('')}
+          </div>
+          <form onsubmit="handleAddCategory(event)" class="flex gap-2">
+            <input type="text" id="new-category-name" required maxlength="30" placeholder="New category (e.g., Church, Jobs, Family)..." class="flex-1 min-w-0 px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <select id="new-category-color" class="px-2 py-2 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-700">
+              ${Object.keys(CATEGORY_COLORS).filter(k => !['indigo', 'amber', 'emerald'].includes(k)).map(k => `<option value="${k}">${CATEGORY_COLORS[k].label}</option>`).join('')}
+            </select>
+            <button type="submit" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer shrink-0">Add</button>
+          </form>
+        </div>`;
+    }
+
+    // Refresh "Now"/"Overdue" states as the day moves on
+    let lastScheduleMinute = '';
+    setInterval(() => {
+      const m = nowHHMM();
+      if (m !== lastScheduleMinute) {
+        if (lastScheduleMinute && uiState.tab === 'schedule') renderSchedule();
+        lastScheduleMinute = m;
+      }
+    }, 5000);
 
     /*************************************************************************
      * FORMATTING UTILITIES
@@ -1108,6 +1753,7 @@
     window.onload = function () {
       updateNotificationButtonUI();
       renderAll();
+      initTab();
       initFirebaseSync();
 
       // Run scheduler tick every second
